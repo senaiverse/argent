@@ -63,7 +63,29 @@ const LISTING = {
     },
     { name: "reject", description: "Reject", inputSchema: { type: "object", properties: {} } },
     { name: "noted", description: "Noted", inputSchema: { type: "object", properties: {} } },
+    { name: "e2e-execute", description: "Run", inputSchema: { type: "object", properties: {} } },
+    // A former id, as the tool-server lists it.
+    {
+      name: "flow-execute",
+      description: "Run",
+      inputSchema: { type: "object", properties: {} },
+      hideFromMcp: true,
+      aliasOf: "e2e-execute",
+    },
   ],
+};
+
+const RUN_REPORT = {
+  ok: true,
+  flow: "demo",
+  device: "",
+  passed: 1,
+  failed: 0,
+  skipped: 0,
+  errored: 0,
+  steps: [{ index: 0, kind: "echo", status: "pass", message: "hi" }],
+  startedAt: 0,
+  durationMs: 1,
 };
 
 type Route = (res: http.ServerResponse) => void | Promise<void>;
@@ -100,6 +122,12 @@ async function startStub({
         return json(200, { data: { reinstalled: true, bundleId: "x" } });
       }
       if (req.method === "POST" && reqUrl === "/tools/reject") return json(422, { error: "nope" });
+      if (
+        req.method === "POST" &&
+        (reqUrl === "/tools/e2e-execute" || reqUrl === "/tools/flow-execute")
+      ) {
+        return json(200, { data: RUN_REPORT });
+      }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
       }
@@ -174,7 +202,17 @@ describe("startMcpServer tool calls", () => {
 
   it("lists the tools of the tool-server", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted"]);
+    expect(tools.map((t) => t.name)).toEqual(["reinstall-app", "reject", "noted", "e2e-execute"]);
+  });
+
+  it("renders a run report the same whether called as flow-execute or e2e-execute", async () => {
+    const byAlias = await client.callTool({ name: "flow-execute", arguments: {} });
+    const byId = await client.callTool({ name: "e2e-execute", arguments: {} });
+
+    expect(byAlias.isError).toBeFalsy();
+    expect(textOf(byAlias)).toContain('Running e2e test "demo"');
+    expect(textOf(byAlias)).not.toContain('"steps"');
+    expect(byAlias.content).toEqual(byId.content);
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {
