@@ -12,10 +12,13 @@ vi.mock("../../src/utils/ios-devices", async (importOriginal) => ({
 }));
 
 const reads: number[] = [];
+// When set, every read throws it.
+let treeError: string | undefined;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     reads.push(reads.length);
+    if (treeError !== undefined) throw new Error(treeError);
     return {
       tree: stillScreen(),
       source: "native-devtools",
@@ -88,6 +91,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-idle-unsupported-"));
   reads.length = 0;
   captures.length = 0;
+  treeError = undefined;
 });
 
 afterEach(async () => {
@@ -128,4 +132,35 @@ describe("await: { idle } on a platform with no flow tree source", () => {
     expect(captures.length).toBeGreaterThanOrEqual(3);
     expect(r.steps[1]).toMatchObject({ kind: "echo", status: "pass" });
   });
+});
+
+// Besides `idle`, only `await`/`assert` report an unreadable tree as
+// `indeterminate` instead of throwing, so only they reach the platform arm.
+describe("an indeterminate selector check on a platform with no flow tree source", () => {
+  const HARMONY = "harmony-127.0.0.1:5555";
+  const IOS = "00000000-0000-0000-0000-0000000000ab";
+  const STEPS: FlowStep[] = [
+    { kind: "await", condition: "visible", selector: { text: "Continue" }, timeout: 300 },
+    { kind: "assert", condition: "visible", selector: { text: "Continue" } },
+  ];
+
+  for (const step of STEPS) {
+    it(`scores \`${step.kind}\` an error on harmony, where the app was never judged`, async () => {
+      treeError = "ui-tree matching is not supported on platform harmony";
+      const r = await run(`${step.kind}-harmony`, HARMONY, [step]);
+
+      expect(r.ok).toBe(false);
+      expect(r.steps[0]).toMatchObject({ kind: step.kind, status: "error" });
+      expect(r.steps[0].reason).toContain("could not read the UI tree");
+    });
+
+    it(`scores \`${step.kind}\` a fail on a platform with a tree source`, async () => {
+      treeError = "native devtools is unavailable";
+      const r = await run(`${step.kind}-ios`, IOS, [step]);
+
+      expect(r.ok).toBe(false);
+      expect(r.steps[0]).toMatchObject({ kind: step.kind, status: "fail" });
+      expect(r.steps[0].reason).toContain("could not read the UI tree");
+    });
+  }
 });
